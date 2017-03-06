@@ -4,6 +4,7 @@ fast_finish: true
 python:
   - 2.7
   - 3.4
+  - 3.5
 env:
   global:
     # 1. Generated a token for travis at https://anaconda.org/quantopian/settings/access with scope api:write.
