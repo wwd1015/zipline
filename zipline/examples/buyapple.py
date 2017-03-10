@@ -14,16 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from zipline.api import order, record, symbol
+from zipline.api import order, record, symbol, sid
 
 
 def initialize(context):
+    # use the sid for AAPL
+    context.asset = sid(24)
     pass
 
 
 def handle_data(context, data):
-    order(symbol('AAPL'), 10)
-    record(AAPL=data.current(symbol('AAPL'), 'price'))
+    order(context.asset, 10)
+    record(AAPL=data.current(context.asset, 'price'))
 
 
 # Note: this function can be removed if running
