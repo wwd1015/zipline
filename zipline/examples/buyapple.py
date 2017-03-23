@@ -14,12 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from zipline.api import order, record, symbol, sid
+from zipline.api import order, record, symbol
 
 
 def initialize(context):
-    # use the sid for AAPL
-    context.asset = sid(24)
+    context.asset = symbol('AAPL')
     pass
 
 
