@@ -19,7 +19,6 @@ from zipline.api import order, record, symbol
 
 def initialize(context):
     context.asset = symbol('AAPL')
-    pass
 
 
 def handle_data(context, data):
