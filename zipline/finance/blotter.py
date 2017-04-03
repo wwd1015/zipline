@@ -18,6 +18,7 @@ from copy import copy
 
 from six import iteritems
 
+from zipline.assets import Equity, Future
 from zipline.finance.order import Order
 from zipline.finance.slippage import VolumeShareSlippage
 from zipline.finance.commission import PerShare
@@ -28,8 +29,8 @@ warning_logger = Logger('AlgoWarning')
 
 
 class Blotter(object):
-    def __init__(self, data_frequency, asset_finder, slippage_func=None,
-                 commission=None, cancel_policy=None):
+    def __init__(self, data_frequency, asset_finder, equity_slippage=None,
+                 future_slippage=None, commission=None, cancel_policy=None):
         # these orders are aggregated by sid
         self.open_orders = defaultdict(list)
 
@@ -47,7 +48,10 @@ class Blotter(object):
 
         self.max_shares = int(1e+11)
 
-        self.slippage_func = slippage_func or VolumeShareSlippage()
+        self.slippage_models = {
+            Equity: equity_slippage or VolumeShareSlippage(),
+            Future: future_slippage or VolumeShareSlippage(),
+        }
         self.commission = commission or PerShare()
 
         self.data_frequency = data_frequency
@@ -57,14 +61,14 @@ class Blotter(object):
     def __repr__(self):
         return """
 {class_name}(
-    slippage={slippage_func},
+    slippage_models={slippage_models},
     commission={commission},
     open_orders={open_orders},
     orders={orders},
     new_orders={new_orders},
     current_dt={current_dt})
 """.strip().format(class_name=self.__class__.__name__,
-                   slippage_func=self.slippage_func,
+                   slippage_models=self.slippage_models,
                    commission=self.commission,
                    open_orders=self.open_orders,
                    orders=self.orders,
@@ -348,8 +352,9 @@ class Blotter(object):
             for sid, asset_orders in iteritems(self.open_orders):
                 asset = asset_dict[sid]
 
+                slippage = self.slippage_models[type(asset)]
                 for order, txn in \
-                        self.slippage_func(bar_data, asset, asset_orders):
+                        slippage.simulate(bar_data, asset, asset_orders):
                     additional_commission = \
                         self.commission.calculate(order, txn)
 

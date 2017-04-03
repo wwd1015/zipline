@@ -16,22 +16,21 @@ from nose_parameterized import parameterized
 
 import pandas as pd
 
+from zipline.assets import Equity
 from zipline.finance.blotter import Blotter
-from zipline.finance.order import ORDER_STATUS, Order
+from zipline.finance.cancel_policy import EODCancel, NeverCancel
 from zipline.finance.execution import (
     LimitOrder,
     MarketOrder,
     StopLimitOrder,
     StopOrder,
 )
-
-from zipline.gens.sim_engine import SESSION_END, BAR
-from zipline.finance.cancel_policy import EODCancel, NeverCancel
+from zipline.finance.order import ORDER_STATUS, Order
 from zipline.finance.slippage import (
     DEFAULT_VOLUME_SLIPPAGE_BAR_LIMIT,
     FixedSlippage,
 )
-from zipline.utils.classproperty import classproperty
+from zipline.gens.sim_engine import BAR, SESSION_END
 from zipline.testing.fixtures import (
     WithCreateBarData,
     WithDataPortal,
@@ -39,6 +38,7 @@ from zipline.testing.fixtures import (
     WithSimParams,
     ZiplineTestCase,
 )
+from zipline.utils.classproperty import classproperty
 
 
 class BlotterTestCase(WithCreateBarData,
@@ -220,7 +220,7 @@ class BlotterTestCase(WithCreateBarData,
         # Reset for paranoia
         blotter = Blotter(self.sim_params.data_frequency,
                           self.asset_finder)
-        blotter.slippage_func = FixedSlippage()
+        blotter.slippage_models[Equity] = FixedSlippage()
         filled_id = blotter.order(self.asset_24, 100, MarketOrder())
         filled_order = None
         blotter.current_dt = self.sim_params.sessions[-1]

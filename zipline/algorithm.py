@@ -94,7 +94,7 @@ from zipline.finance.asset_restrictions import (
     StaticRestrictions,
     SecurityListRestrictions,
 )
-from zipline.assets import Asset, Future
+from zipline.assets import Asset, Equity, Future
 from zipline.gens.tradesimulation import AlgorithmSimulator
 from zipline.pipeline import Pipeline
 from zipline.pipeline.engine import (
@@ -324,7 +324,8 @@ class TradingAlgorithm(object):
             self.blotter = Blotter(
                 data_frequency=self.data_frequency,
                 asset_finder=self.asset_finder,
-                slippage_func=VolumeShareSlippage(),
+                equity_slippage=VolumeShareSlippage(),
+                future_slippage=VolumeShareSlippage(),
                 commission=PerShare(),
                 # Default to NeverCancel in zipline
                 cancel_policy=self.cancel_policy
@@ -501,7 +502,7 @@ class TradingAlgorithm(object):
                    capital_base=self.sim_params.capital_base,
                    sim_params=repr(self.sim_params),
                    initialized=self.initialized,
-                   slippage=repr(self.blotter.slippage_func),
+                   slippage_models=repr(self.blotter.slippage_models),
                    commission=repr(self.blotter.commission),
                    blotter=repr(self.blotter),
                    recorded_vars=repr(self.recorded_vars))
@@ -1662,7 +1663,9 @@ class TradingAlgorithm(object):
             raise UnsupportedSlippageModel()
         if self.initialized:
             raise SetSlippagePostInit()
-        self.blotter.slippage_func = slippage
+        # TODO: Create separate API methods for setting Equity and Future
+        # slippage models.
+        self.blotter.slippage_models[Equity] = slippage
 
     @api_method
     def set_commission(self, commission):
