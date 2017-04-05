@@ -55,6 +55,7 @@ class BlotterTestCase(WithCreateBarData,
         super(BlotterTestCase, cls).init_class_fixtures()
         cls.asset_24 = cls.asset_finder.retrieve_asset(24)
         cls.asset_25 = cls.asset_finder.retrieve_asset(25)
+        cls.future_cl = cls.asset_finder.retrieve_asset(1000)
 
     @classmethod
     def make_equity_daily_bar_data(cls):
@@ -77,6 +78,23 @@ class BlotterTestCase(WithCreateBarData,
                 'volume': [100, 400],
             },
             index=cls.sim_params.sessions,
+        )
+
+    @classmethod
+    def make_futures_info(cls):
+        return pd.DataFrame.from_dict(
+            {
+                1000: {
+                    'symbol': 'CLF06',
+                    'root_symbol': 'CL',
+                    'start_date': cls.START_DATE,
+                    'end_date': cls.END_DATE,
+                    'expiration_date': cls.END_DATE,
+                    'auto_close_date': cls.END_DATE,
+                    'exchange': 'CME',
+                },
+            },
+            orient='index',
         )
 
     @classproperty
@@ -363,3 +381,34 @@ class BlotterTestCase(WithCreateBarData,
                                  blotter1.open_orders[asset][i-1].id)
                 self.assertEqual(order_id,
                                  blotter2.open_orders[asset][i-1].id)
+
+    def test_slippage_dispatching(self):
+        blotter = Blotter(
+            self.sim_params.data_frequency,
+            self.asset_finder,
+            equity_slippage=FixedSlippage(spread=0.0),
+            future_slippage=FixedSlippage(spread=2.0),
+        )
+        blotter.order(self.asset_24, 1, MarketOrder())
+        blotter.order(self.future_cl, 1, MarketOrder())
+        blotter.current_dt = self.sim_params.sessions[-1]
+        bar_data = self.create_bardata(
+            simulation_dt_func=lambda: blotter.current_dt,
+        )
+        txns = blotter.get_transactions(bar_data)[0]
+
+        # The equity transaction should have the same price as its current
+        # price because the slippage spread is zero.
+        equity_txn = txns[0]
+        self.assertEqual(
+            equity_txn.price,
+            bar_data.current(equity_txn.sid, 'price'),
+        )
+
+        # The future transaction price should be 1.0 more than its current
+        # price because half of the 'future_slippage' spread is added.
+        future_txn = txns[1]
+        self.assertEqual(
+            future_txn.price,
+            bar_data.current(future_txn.sid, 'price') + 1.0,
+        )
