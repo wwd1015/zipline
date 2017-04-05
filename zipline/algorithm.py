@@ -67,7 +67,7 @@ from zipline.errors import (
 )
 from zipline.finance.trading import TradingEnvironment
 from zipline.finance.blotter import Blotter
-from zipline.finance.commission import PerShare, CommissionModel
+from zipline.finance.commission import CommissionModel
 from zipline.finance.controls import (
     LongOnly,
     MaxOrderCount,
@@ -84,10 +84,7 @@ from zipline.finance.execution import (
 )
 from zipline.finance.performance import PerformanceTracker
 from zipline.finance.asset_restrictions import Restrictions
-from zipline.finance.slippage import (
-    VolumeShareSlippage,
-    SlippageModel
-)
+from zipline.finance.slippage import SlippageModel
 from zipline.finance.cancel_policy import NeverCancel, CancelPolicy
 from zipline.finance.asset_restrictions import (
     NoRestrictions,
@@ -324,11 +321,8 @@ class TradingAlgorithm(object):
             self.blotter = Blotter(
                 data_frequency=self.data_frequency,
                 asset_finder=self.asset_finder,
-                equity_slippage=VolumeShareSlippage(),
-                future_slippage=VolumeShareSlippage(),
-                commission=PerShare(),
                 # Default to NeverCancel in zipline
-                cancel_policy=self.cancel_policy
+                cancel_policy=self.cancel_policy,
             )
 
         # The symbol lookup date specifies the date to use when resolving
@@ -494,8 +488,8 @@ class TradingAlgorithm(object):
     capital_base={capital_base}
     sim_params={sim_params},
     initialized={initialized},
-    slippage={slippage},
-    commission={commission},
+    slippage_models={slippage_models},
+    commission_models={commission_models},
     blotter={blotter},
     recorded_vars={recorded_vars})
 """.strip().format(class_name=self.__class__.__name__,
@@ -503,7 +497,7 @@ class TradingAlgorithm(object):
                    sim_params=repr(self.sim_params),
                    initialized=self.initialized,
                    slippage_models=repr(self.blotter.slippage_models),
-                   commission=repr(self.blotter.commission),
+                   commission_models=repr(self.blotter.commission_models),
                    blotter=repr(self.blotter),
                    recorded_vars=repr(self.recorded_vars))
 
@@ -1688,7 +1682,9 @@ class TradingAlgorithm(object):
         if self.initialized:
             raise SetCommissionPostInit()
 
-        self.blotter.commission = commission
+        # TODO: Create separate API methods for setting Equity and Future
+        # commission models.
+        self.blotter.commission_models[Equity] = commission
 
     @api_method
     def set_cancel_policy(self, cancel_policy):

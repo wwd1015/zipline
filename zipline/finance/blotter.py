@@ -21,7 +21,11 @@ from six import iteritems
 from zipline.assets import Equity, Future
 from zipline.finance.order import Order
 from zipline.finance.slippage import VolumeShareSlippage
-from zipline.finance.commission import PerShare
+from zipline.finance.commission import (
+    DEFAULT_FUTURE_COST_PER_TRADE,
+    PerShare,
+    PerTrade,
+)
 from zipline.finance.cancel_policy import NeverCancel
 
 log = Logger('Blotter')
@@ -30,7 +34,8 @@ warning_logger = Logger('AlgoWarning')
 
 class Blotter(object):
     def __init__(self, data_frequency, asset_finder, equity_slippage=None,
-                 future_slippage=None, commission=None, cancel_policy=None):
+                 future_slippage=None, equity_commission=None,
+                 future_commission=None, cancel_policy=None):
         # these orders are aggregated by sid
         self.open_orders = defaultdict(list)
 
@@ -52,7 +57,12 @@ class Blotter(object):
             Equity: equity_slippage or VolumeShareSlippage(),
             Future: future_slippage or VolumeShareSlippage(),
         }
-        self.commission = commission or PerShare()
+        self.commission_models = {
+            Equity: equity_commission or PerShare(),
+            Future: future_commission or PerTrade(
+                cost=DEFAULT_FUTURE_COST_PER_TRADE,
+            ),
+        }
 
         self.data_frequency = data_frequency
 
@@ -62,14 +72,14 @@ class Blotter(object):
         return """
 {class_name}(
     slippage_models={slippage_models},
-    commission={commission},
+    commission_models={commission_models},
     open_orders={open_orders},
     orders={orders},
     new_orders={new_orders},
     current_dt={current_dt})
 """.strip().format(class_name=self.__class__.__name__,
                    slippage_models=self.slippage_models,
-                   commission=self.commission,
+                   commission_models=self.commission_models,
                    open_orders=self.open_orders,
                    orders=self.orders,
                    new_orders=self.new_orders,
@@ -351,12 +361,12 @@ class Blotter(object):
 
             for sid, asset_orders in iteritems(self.open_orders):
                 asset = asset_dict[sid]
-
                 slippage = self.slippage_models[type(asset)]
+
                 for order, txn in \
                         slippage.simulate(bar_data, asset, asset_orders):
-                    additional_commission = \
-                        self.commission.calculate(order, txn)
+                    commission = self.commission_models[type(asset)]
+                    additional_commission = commission.calculate(order, txn)
 
                     if additional_commission > 0:
                         commissions.append({
