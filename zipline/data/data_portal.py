@@ -650,47 +650,37 @@ class DataPortal(object):
 
     def _get_minute_spot_value(self, asset, column, dt, ffill=False):
         reader = self._get_pricing_reader('minute')
-        try:
-            result = reader.get_value(
-                asset.sid, dt, column
-            )
-        except NoDataOnDate:
-            if not ffill:
+
+        if ffill:
+            # If forward filling, we want the last minute with values (up to
+            # and including dt).
+            query_dt = reader.get_last_traded_dt(asset, dt)
+
+            if pd.isnull(query_dt):
+                # no last traded dt, bail
                 if column == 'volume':
                     return 0
                 else:
                     return np.nan
+        else:
+            # If not forward filling, we just want dt.
+            query_dt = dt
 
-        if not ffill:
-            return result
-
-        # we are looking for price, and didn't find one. have to go hunting.
-        last_traded_dt = reader.get_last_traded_dt(asset, dt)
-
-        if last_traded_dt is pd.NaT:
-            # no last traded dt, bail
+        try:
+            result = reader.get_value(asset.sid, query_dt, column)
+        except NoDataOnDate:
             if column == 'volume':
                 return 0
             else:
                 return np.nan
 
-        # get the value as of the last traded dt
-        result = reader.get_value(
-            asset.sid,
-            last_traded_dt,
-            column
-        )
-
-        if np.isnan(result):
-            return np.nan
-
-        if dt == last_traded_dt or dt.date() == last_traded_dt.date():
+        if not ffill or (dt == query_dt) or (dt.date() == query_dt.date()):
             return result
 
         # the value we found came from a different day, so we have to adjust
         # the data if there are any adjustments on that day barrier
         return self.get_adjusted_value(
-            asset, column, last_traded_dt,
+            asset, column, query_dt,
             dt, "minute", spot_value=result
         )
 
@@ -745,8 +735,12 @@ class DataPortal(object):
             )
         return tds[start_loc:end_loc + 1]
 
-    def _get_history_daily_window(self, assets, end_dt, bar_count,
-                                  field_to_use):
+    def _get_history_daily_window(self,
+                                  assets,
+                                  end_dt,
+                                  bar_count,
+                                  field_to_use,
+                                  data_frequency):
         """
         Internal method that returns a dataframe containing history bars
         of daily frequency for the given sids.
@@ -760,7 +754,7 @@ class DataPortal(object):
                                 columns=None)
 
         data = self._get_history_daily_window_data(
-            assets, days_for_window, end_dt, field_to_use
+            assets, days_for_window, end_dt, field_to_use, data_frequency
         )
         return pd.DataFrame(
             data,
@@ -772,10 +766,9 @@ class DataPortal(object):
                                        assets,
                                        days_for_window,
                                        end_dt,
-                                       field_to_use):
-        ends_at_midnight = (end_dt.hour == end_dt.minute == 0)
-
-        if ends_at_midnight:
+                                       field_to_use,
+                                       data_frequency):
+        if data_frequency == 'daily':
             # two cases where we use daily data for the whole range:
             # 1) the history window ends at midnight utc.
             # 2) the last desired day of the window is after the
@@ -820,23 +813,25 @@ class DataPortal(object):
             return daily_data
 
     def _handle_minute_history_out_of_bounds(self, bar_count):
+        cal = self.trading_calendar
+
         first_trading_minute_loc = (
-            self.trading_calendar.all_minutes.get_loc(
+            cal.all_minutes.get_loc(
                 self._first_trading_minute
             )
             if self._first_trading_minute is not None else None
         )
 
-        suggested_start_day = (
-            self.trading_calendar.all_minutes[
+        suggested_start_day = cal.minute_to_session_label(
+            cal.all_minutes[
                 first_trading_minute_loc + bar_count
-            ] + self.trading_calendar.day
-        ).date()
+            ] + cal.day
+        )
 
         raise HistoryWindowStartsBeforeData(
             first_trading_day=self._first_trading_day.date(),
             bar_count=bar_count,
-            suggested_start_day=suggested_start_day,
+            suggested_start_day=suggested_start_day.date(),
         )
 
     def _get_history_minute_window(self, assets, end_dt, bar_count,
@@ -868,7 +863,13 @@ class DataPortal(object):
             columns=assets
         )
 
-    def get_history_window(self, assets, end_dt, bar_count, frequency, field,
+    def get_history_window(self,
+                           assets,
+                           end_dt,
+                           bar_count,
+                           frequency,
+                           field,
+                           data_frequency,
                            ffill=True):
         """
         Public API method that returns a dataframe containing the requested
@@ -888,6 +889,10 @@ class DataPortal(object):
         field: string
             The desired field of the asset.
 
+        data_frequency: string
+            The frequency of the data to query; i.e. whether the data is
+            'daily' or 'minute' bars.
+
         ffill: boolean
             Forward-fill missing values. Only has effect if field
             is 'price'.
@@ -902,10 +907,10 @@ class DataPortal(object):
         if frequency == "1d":
             if field == "price":
                 df = self._get_history_daily_window(assets, end_dt, bar_count,
-                                                    "close")
+                                                    "close", data_frequency)
             else:
                 df = self._get_history_daily_window(assets, end_dt, bar_count,
-                                                    field)
+                                                    field, data_frequency)
         elif frequency == "1m":
             if field == "price":
                 df = self._get_history_minute_window(assets, end_dt, bar_count,
@@ -1131,25 +1136,25 @@ class DataPortal(object):
 
             self._asset_end_dates[sid] = asset.end_date
 
-    def get_splits(self, sids, dt):
+    def get_splits(self, assets, dt):
         """
         Returns any splits for the given sids and the given dt.
 
         Parameters
         ----------
-        sids : container
-            Sids for which we want splits.
+        assets : container
+            Assets for which we want splits.
         dt : pd.Timestamp
             The date for which we are checking for splits. Note: this is
             expected to be midnight UTC.
 
         Returns
         -------
-        splits : list[(int, float)]
-            List of splits, where each split is a (sid, ratio) tuple.
+        splits : list[(asset, float)]
+            List of splits, where each split is a (asset, ratio) tuple.
         """
-        if self._adjustment_reader is None or not sids:
-            return {}
+        if self._adjustment_reader is None or not assets:
+            return []
 
         # convert dt to # of seconds since epoch, because that's what we use
         # in the adjustments db
@@ -1159,7 +1164,9 @@ class DataPortal(object):
             "SELECT sid, ratio FROM SPLITS WHERE effective_date = ?",
             (seconds,)).fetchall()
 
-        splits = [split for split in splits if split[0] in sids]
+        splits = [split for split in splits if split[0] in assets]
+        splits = [(self.asset_finder.retrieve_asset(split[0]), split[1])
+                  for split in splits]
 
         return splits
 
@@ -1305,7 +1312,13 @@ class DataPortal(object):
             # returns is always calculated over the last 2 days, regardless
             # of the simulation's data frequency.
             hst = self.get_history_window(
-                [asset], dt, 2, "1d", "price", ffill=True
+                [asset],
+                dt,
+                2,
+                "1d",
+                "price",
+                data_frequency,
+                ffill=True,
             )[asset]
 
             return (hst.iloc[-1] - hst.iloc[0]) / hst.iloc[0]
@@ -1323,7 +1336,13 @@ class DataPortal(object):
             calculated_bar_count = bars
 
         price_arr = self.get_history_window(
-            [asset], dt, calculated_bar_count, freq_str, "price", ffill=True
+            [asset],
+            dt,
+            calculated_bar_count,
+            freq_str,
+            "price",
+            data_frequency,
+            ffill=True,
         )[asset]
 
         if transform_name == "mavg":
@@ -1332,8 +1351,13 @@ class DataPortal(object):
             return nanstd(price_arr, ddof=1)
         elif transform_name == "vwap":
             volume_arr = self.get_history_window(
-                [asset], dt, calculated_bar_count, freq_str, "volume",
-                ffill=True
+                [asset],
+                dt,
+                calculated_bar_count,
+                freq_str,
+                "volume",
+                data_frequency,
+                ffill=True,
             )[asset]
 
             vol_sum = nansum(volume_arr)
@@ -1350,7 +1374,9 @@ class DataPortal(object):
         Retrieves the future chain for the contract at the given `dt` according
         the `continuous_future` specification.
 
-        Returns:
+        Returns
+        -------
+
         future_chain : list[Future]
             A list of active futures, where the first index is the current
             contract specified by the continuous future definition, the second

@@ -39,6 +39,8 @@ from zipline.utils.input_validation import (
     preprocess,
 )
 from zipline.utils.memoize import lazyval
+from zipline.utils.pandas_utils import days_at_time
+
 
 start_default = pd.Timestamp('1990-01-01', tz='UTC')
 end_base = pd.Timestamp('today', tz='UTC')
@@ -460,7 +462,10 @@ class TradingCalendar(with_metaclass(ABCMeta)):
         pd.DateTimeIndex
             All the minutes for the given session.
         """
-        return self.minutes_in_range(*self.schedule.loc[session_label])
+        return self.minutes_in_range(
+            start_minute=self.schedule.at[session_label, 'market_open'],
+            end_minute=self.schedule.at[session_label, 'market_close'],
+        )
 
     def minutes_window(self, start_dt, count):
         start_dt_nanos = start_dt.value
@@ -635,25 +640,39 @@ class TradingCalendar(with_metaclass(ABCMeta)):
         (Timestamp, Timestamp)
             The open and close for the given session.
         """
-        o_and_c = self.schedule.loc[session_label]
+        sched = self.schedule
 
         # `market_open` and `market_close` should be timezone aware, but pandas
         # 0.16.1 does not appear to support this:
         # http://pandas.pydata.org/pandas-docs/stable/whatsnew.html#datetime-with-tz  # noqa
-        return (o_and_c['market_open'].tz_localize('UTC'),
-                o_and_c['market_close'].tz_localize('UTC'))
+        return (
+            sched.at[session_label, 'market_open'].tz_localize('UTC'),
+            sched.at[session_label, 'market_close'].tz_localize('UTC'),
+        )
 
     def session_open(self, session_label):
-        return self.schedule.loc[
+        return self.schedule.at[
             session_label,
             'market_open'
         ].tz_localize('UTC')
 
     def session_close(self, session_label):
-        return self.schedule.loc[
+        return self.schedule.at[
             session_label,
             'market_close'
         ].tz_localize('UTC')
+
+    def session_opens_in_range(self, start_session_label, end_session_label):
+        return self.schedule.loc[
+            start_session_label:end_session_label,
+            'market_open',
+        ].dt.tz_localize('UTC')
+
+    def session_closes_in_range(self, start_session_label, end_session_label):
+        return self.schedule.loc[
+            start_session_label:end_session_label,
+            'market_close',
+        ].dt.tz_localize('UTC')
 
     @property
     def all_sessions(self):
@@ -825,58 +844,9 @@ class TradingCalendar(with_metaclass(ABCMeta)):
         )
 
 
-def days_at_time(days, t, tz, day_offset=0):
-    """
-    Create an index of days at time ``t``, interpreted in timezone ``tz``.
-
-    The returned index is localized to UTC.
-
-    Parameters
-    ----------
-    days : DatetimeIndex
-        An index of dates (represented as midnight).
-    t : datetime.time
-        The time to apply as an offset to each day in ``days``.
-    tz : pytz.timezone
-        The timezone to use to interpret ``t``.
-    day_offset : int
-        The number of days we want to offset @days by
-
-    Example
-    -------
-    In the example below, the times switch from 13:45 to 12:45 UTC because
-    March 13th is the daylight savings transition for US/Eastern.  All the
-    times are still 8:45 when interpreted in US/Eastern.
-
-    >>> import pandas as pd; import datetime; import pprint
-    >>> dts = pd.date_range('2016-03-12', '2016-03-14')
-    >>> dts_at_845 = days_at_time(dts, datetime.time(8, 45), 'US/Eastern')
-    >>> pprint.pprint([str(dt) for dt in dts_at_845])
-    ['2016-03-12 13:45:00+00:00',
-     '2016-03-13 12:45:00+00:00',
-     '2016-03-14 12:45:00+00:00']
-    """
-    if len(days) == 0:
-        return days
-
-    # Offset days without tz to avoid timezone issues.
-    days = DatetimeIndex(days).tz_localize(None)
-    delta = pd.Timedelta(
-        days=day_offset,
-        hours=t.hour,
-        minutes=t.minute,
-        seconds=t.second,
-    )
-    return (days + delta).tz_localize(tz).tz_convert('UTC')
-
-
 def holidays_at_time(calendar, start, end, time, tz):
     return days_at_time(
-        calendar.holidays(
-            # Workaround for https://github.com/pydata/pandas/issues/9825.
-            start.tz_localize(None),
-            end.tz_localize(None),
-        ),
+        calendar.holidays(start, end),
         time,
         tz=tz,
     )
